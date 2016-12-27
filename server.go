@@ -13,12 +13,18 @@ import (
 
 	wire "github.com/chai2010/protorpc/wire.pb"
 	"github.com/golang/protobuf/proto"
+	"github.com/streadway/amqp"
 )
 
 type serverCodec struct {
-	r io.Reader
-	w io.Writer
-	c io.Closer
+	Uri          string
+	ExchangeName string
+	QueueName    string
+	ReplyTo      string
+	AmqpConnect  *amqp.Connection
+	AmqpChannel  *amqp.Channel
+	AmqpQueue    amqp.Queue
+	AmqMsgs      <-chan amqp.Delivery
 
 	// temporary work space
 	reqHeader wire.RequestHeader
@@ -35,18 +41,69 @@ type serverCodec struct {
 
 // NewServerCodec returns a serverCodec that communicates with the ClientCodec
 // on the other end of the given conn.
-func NewServerCodec(conn io.ReadWriteCloser) rpc.ServerCodec {
+func NewServerCodec(uri string, exchangeName string, queueName string) rpc.ServerCodec {
 	return &serverCodec{
-		r:       conn,
-		w:       conn,
-		c:       conn,
-		pending: make(map[uint64]uint64),
+		Uri:          uri,
+		ExchangeName: exchangeName,
+		QueueName:    queueName,
+		pending:      make(map[uint64]uint64),
 	}
 }
 
+func (c *serverCodec) readyQueue() error {
+
+	log.Println("start connect broker")
+	var err error
+	if c.AmqpConnect == nil {
+		c.AmqpConnect, err = amqp.Dial(c.Uri)
+		if err != nil {
+			log.Println("amqp dial error:%v", err)
+			return err
+		}
+	}
+	log.Println("connect broker success")
+	if c.AmqpChannel == nil {
+		c.AmqpChannel, err = c.AmqpConnect.Channel()
+		if err != nil {
+			log.Println("amqp channel error:%v", err)
+			return err
+		}
+	}
+	if c.AmqpQueue.Name == "" {
+		log.Println("AmqpQueue  create")
+		c.AmqpQueue, err = c.AmqpChannel.QueueDeclare(c.QueueName, false, false, false, false, nil)
+		if err != nil {
+			log.Println("amqp Queue Declare error:%v", err)
+			return err
+		}
+	}
+
+	msgs, err := c.AmqpChannel.Consume(
+		c.AmqpQueue.Name, // queue
+		"",               // consumer
+		true,             // auto-ack
+		true,             // exclusive
+		false,            // no-local
+		false,            // no-wait
+		nil,              // args
+	)
+	if err != nil {
+		log.Println("Consume fail :", err)
+		return err
+	}
+
+	return nil
+}
+
 func (c *serverCodec) ReadRequestHeader(r *rpc.Request) error {
+	err := c.readyQueue()
+	if err != nil {
+		return err
+	}
 	header := wire.RequestHeader{}
-	err := readRequestHeader(c.r, &header)
+	msg := <-c.AmqMsgs
+	// Marshal Header
+	err = proto.Unmarshal(msg.Body, &header)
 	if err != nil {
 		return err
 	}
@@ -57,12 +114,15 @@ func (c *serverCodec) ReadRequestHeader(r *rpc.Request) error {
 	r.ServiceMethod = header.Method
 	r.Seq = c.seq
 	c.mutex.Unlock()
-
 	c.reqHeader = header
 	return nil
 }
 
 func (c *serverCodec) ReadRequestBody(x interface{}) error {
+	err := c.readyQueue()
+	if err != nil {
+		return err
+	}
 	if x == nil {
 		return nil
 	}
@@ -74,11 +134,30 @@ func (c *serverCodec) ReadRequestBody(x interface{}) error {
 		)
 	}
 
-	err := readRequestBody(c.r, &c.reqHeader, request)
-	if err != nil {
-		return nil
+	msg := <-c.AmqMsgs
+
+	// checksum
+	if crc32.ChecksumIEEE(msg.Body) != c.reqHeader.Checksum {
+		return fmt.Errorf("protorpc.readRequestBody: unexpected checksum.")
 	}
 
+	// decode the compressed data
+	pbRequest, err := snappy.Decode(nil, msg.Body)
+	if err != nil {
+		return err
+	}
+	// check wire header: rawMsgLen
+	if uint32(len(pbRequest)) != header.RawRequestLen {
+		return fmt.Errorf("protorpc.readRequestBody: Unexcpeted header.RawRequestLen.")
+	}
+
+	// Unmarshal to proto message
+	if request != nil {
+		err = proto.Unmarshal(pbRequest, request)
+		if err != nil {
+			return err
+		}
+	}
 	c.reqHeader = wire.RequestHeader{}
 	return nil
 }
@@ -89,6 +168,10 @@ func (c *serverCodec) ReadRequestBody(x interface{}) error {
 var invalidRequest = struct{}{}
 
 func (c *serverCodec) WriteResponse(r *rpc.Response, x interface{}) error {
+	err := c.readyQueue()
+	if err != nil {
+		return err
+	}
 	var response proto.Message
 	if x != nil {
 		var ok bool
@@ -122,13 +205,19 @@ func (c *serverCodec) WriteResponse(r *rpc.Response, x interface{}) error {
 	return nil
 }
 
-func (s *serverCodec) Close() error {
-	return s.c.Close()
+func (c *serverCodec) Close() error {
+	var err error
+	err = c.AmqpChannel.Close()
+	if err == nil {
+		err = c.AmqpConnect.Close()
+	}
+
+	return err
 }
 
 // ServeConn runs the Protobuf-RPC server on a single connection.
 // ServeConn blocks, serving the connection until the client hangs up.
 // The caller typically invokes ServeConn in a go statement.
-func ServeConn(conn io.ReadWriteCloser) {
-	rpc.ServeCodec(NewServerCodec(conn))
+func ServeConn(uri string, exchangeName string, queueName string) {
+	rpc.ServeCodec(NewServerCodec(uri, exchangeName, queueName))
 }
