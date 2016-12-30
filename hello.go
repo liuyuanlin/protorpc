@@ -10,8 +10,9 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/chai2010/protorpc"
-	service "github.com/chai2010/protorpc/examples/service.pb"
+	"rmqrpc"
+
+	service "rmqrpc/examples/service.pb"
 )
 
 type Echo int

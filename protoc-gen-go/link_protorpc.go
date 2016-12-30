@@ -4,4 +4,4 @@
 
 package main
 
-import _ "github.com/chai2010/protorpc/protoc-gen-go/protorpc"
+import _ "rmqrpc/protoc-gen-go/protorpc"

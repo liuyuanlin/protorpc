@@ -24,7 +24,7 @@ import "log"
 import "net"
 import "net/rpc"
 import "time"
-import protorpc "github.com/chai2010/protorpc"
+import protorpc  "rmqrpc"
 
 // Reference imports to suppress errors if they are not otherwise used.
 var _ = proto.Marshal
@@ -33,7 +33,7 @@ var _ = math.Inf
 
 type Message_Humour int32
 
-const (
+const (pb
 	Message_UNKNOWN     Message_Humour = 0
 	Message_PUNS        Message_Humour = 1
 	Message_SLAPSTICK   Message_Humour = 2

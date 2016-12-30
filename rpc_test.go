@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package protorpc_test
+package rmqrpc_test
 
 import (
 	"errors"
@@ -12,8 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/chai2010/protorpc"
-	msg "github.com/chai2010/protorpc/examples/message.pb"
+	"rmqrpc"
+
+	msg "rmqrpc/examples/message.pb"
 )
 
 type Arith int

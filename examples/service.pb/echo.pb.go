@@ -13,7 +13,7 @@ import "log"
 import "net"
 import "net/rpc"
 import "time"
-import protorpc "github.com/chai2010/protorpc"
+import protorpc "rmqrpc"
 
 // Reference imports to suppress errors if they are not otherwise used.
 var _ = proto.Marshal

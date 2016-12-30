@@ -2,25 +2,31 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package protorpc
+package rmqrpc
 
 import (
 	"errors"
 	"fmt"
-	"io"
+	"hash/crc32"
+	"log"
 	"net/rpc"
 	"sync"
 
-	wire "github.com/chai2010/protorpc/wire.pb"
 	"github.com/golang/protobuf/proto"
+	"github.com/golang/snappy"
 	"github.com/streadway/amqp"
+	wire "rmqrpc/wire.pb"
 )
+
+type requestAttr struct {
+	Id      uint64
+	ReplyTo string
+}
 
 type serverCodec struct {
 	Uri          string
 	ExchangeName string
 	QueueName    string
-	ReplyTo      string
 	AmqpConnect  *amqp.Connection
 	AmqpChannel  *amqp.Channel
 	AmqpQueue    amqp.Queue
@@ -36,7 +42,7 @@ type serverCodec struct {
 	// the response to find the original request ID.
 	mutex   sync.Mutex // protects seq, pending
 	seq     uint64
-	pending map[uint64]uint64
+	pending map[uint64]requestAttr
 }
 
 // NewServerCodec returns a serverCodec that communicates with the ClientCodec
@@ -46,7 +52,7 @@ func NewServerCodec(uri string, exchangeName string, queueName string) rpc.Serve
 		Uri:          uri,
 		ExchangeName: exchangeName,
 		QueueName:    queueName,
-		pending:      make(map[uint64]uint64),
+		pending:      make(map[uint64]requestAttr),
 	}
 }
 
@@ -78,7 +84,7 @@ func (c *serverCodec) readyQueue() error {
 		}
 	}
 
-	msgs, err := c.AmqpChannel.Consume(
+	c.AmqMsgs, err = c.AmqpChannel.Consume(
 		c.AmqpQueue.Name, // queue
 		"",               // consumer
 		true,             // auto-ack
@@ -108,9 +114,13 @@ func (c *serverCodec) ReadRequestHeader(r *rpc.Request) error {
 		return err
 	}
 
+	if msg.ReplyTo == "" {
+		return errors.New("reply to is nil")
+	}
+
 	c.mutex.Lock()
 	c.seq++
-	c.pending[c.seq] = header.Id
+	c.pending[c.seq] = requestAttr{Id: header.Id, ReplyTo: msg.ReplyTo}
 	r.ServiceMethod = header.Method
 	r.Seq = c.seq
 	c.mutex.Unlock()
@@ -119,10 +129,6 @@ func (c *serverCodec) ReadRequestHeader(r *rpc.Request) error {
 }
 
 func (c *serverCodec) ReadRequestBody(x interface{}) error {
-	err := c.readyQueue()
-	if err != nil {
-		return err
-	}
 	if x == nil {
 		return nil
 	}
@@ -134,20 +140,18 @@ func (c *serverCodec) ReadRequestBody(x interface{}) error {
 		)
 	}
 
-	msg := <-c.AmqMsgs
-
 	// checksum
-	if crc32.ChecksumIEEE(msg.Body) != c.reqHeader.Checksum {
+	if crc32.ChecksumIEEE(c.reqHeader.Body) != c.reqHeader.Checksum {
 		return fmt.Errorf("protorpc.readRequestBody: unexpected checksum.")
 	}
 
 	// decode the compressed data
-	pbRequest, err := snappy.Decode(nil, msg.Body)
+	pbRequest, err := snappy.Decode(nil, c.reqHeader.Body)
 	if err != nil {
 		return err
 	}
 	// check wire header: rawMsgLen
-	if uint32(len(pbRequest)) != header.RawRequestLen {
+	if uint32(len(pbRequest)) != c.reqHeader.RawRequestLen {
 		return fmt.Errorf("protorpc.readRequestBody: Unexcpeted header.RawRequestLen.")
 	}
 
@@ -189,7 +193,7 @@ func (c *serverCodec) WriteResponse(r *rpc.Response, x interface{}) error {
 	}
 
 	c.mutex.Lock()
-	id, ok := c.pending[r.Seq]
+	attr, ok := c.pending[r.Seq]
 	if !ok {
 		c.mutex.Unlock()
 		return errors.New("protorpc: invalid sequence number in response")
@@ -197,11 +201,63 @@ func (c *serverCodec) WriteResponse(r *rpc.Response, x interface{}) error {
 	delete(c.pending, r.Seq)
 	c.mutex.Unlock()
 
-	err := writeResponse(c.w, id, r.Error, response)
+	err = c.RBwriteResponse(attr, r.Error, response)
 	if err != nil {
 		return err
 	}
 
+	return nil
+}
+
+func (c *serverCodec) RBwriteResponse(attr requestAttr, serr string, response proto.Message) (err error) {
+	// clean response if error
+	if serr != "" {
+		response = nil
+	}
+
+	// marshal response
+	pbResponse := []byte{}
+	if response != nil {
+		pbResponse, err = proto.Marshal(response)
+		if err != nil {
+			return err
+		}
+	}
+
+	// compress serialized proto data
+	compressedPbResponse := snappy.Encode(nil, pbResponse)
+
+	// generate header
+	header := &wire.ResponseHeader{
+		Id:                          attr.Id,
+		Error:                       serr,
+		RawResponseLen:              uint32(len(pbResponse)),
+		SnappyCompressedResponseLen: uint32(len(compressedPbResponse)),
+		Checksum:                    crc32.ChecksumIEEE(compressedPbResponse),
+		Body:                        compressedPbResponse,
+	}
+
+	// check header size
+	pbHeader, err := proto.Marshal(header)
+	if err != err {
+		return
+	}
+
+	err = c.AmqpChannel.Publish(
+		c.ExchangeName, // exchange
+		attr.ReplyTo,   // routing key
+		false,          // mandatory
+		false,          // immediate
+		amqp.Publishing{
+			Headers:         amqp.Table{},
+			ContentType:     "text/plain",
+			ContentEncoding: "",
+			Body:            pbHeader,
+		})
+	if err != nil {
+		log.Fatal("Publish error: ", err)
+		return
+	}
 	return nil
 }
 

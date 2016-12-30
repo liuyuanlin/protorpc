@@ -2,24 +2,30 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package protorpc
+package rmqrpc
 
 import (
 	"fmt"
-	"io"
-	"net"
+	"hash/crc32"
+	"log"
 	"net/rpc"
 	"sync"
-	"time"
 
-	wire "github.com/chai2010/protorpc/wire.pb"
 	"github.com/golang/protobuf/proto"
+	"github.com/golang/snappy"
+	"github.com/streadway/amqp"
+	wire "rmqrpc/wire.pb"
 )
 
 type clientCodec struct {
-	r io.Reader
-	w io.Writer
-	c io.Closer
+	Uri          string
+	ExchangeName string
+	QueueName    string
+	ReplyTo      string
+	AmqpConnect  *amqp.Connection
+	AmqpChannel  *amqp.Channel
+	AmqpQueue    amqp.Queue
+	AmqMsgs      <-chan amqp.Delivery
 
 	// temporary work space
 	respHeader wire.ResponseHeader
@@ -33,13 +39,68 @@ type clientCodec struct {
 }
 
 // NewClientCodec returns a new rpc.ClientCodec using Protobuf-RPC on conn.
-func NewClientCodec(conn io.ReadWriteCloser) rpc.ClientCodec {
+func NewClientCodec(uri string, exchangeName string, queueName string) rpc.ClientCodec {
 	return &clientCodec{
-		r:       conn,
-		w:       conn,
-		c:       conn,
-		pending: make(map[uint64]string),
+		Uri:          uri,
+		ExchangeName: exchangeName,
+		QueueName:    queueName,
+		pending:      make(map[uint64]string),
 	}
+}
+
+func (c *clientCodec) readyQueue() error {
+
+	log.Println("start connect broker")
+	var err error
+	if c.AmqpConnect == nil {
+		c.AmqpConnect, err = amqp.Dial(c.Uri)
+		if err != nil {
+			log.Println("amqp dial error:%v", err)
+			return err
+		}
+	}
+	log.Println("connect broker success")
+	if c.AmqpChannel == nil {
+		c.AmqpChannel, err = c.AmqpConnect.Channel()
+		if err != nil {
+			log.Println("amqp channel error:%v", err)
+			return err
+		}
+	}
+	if c.AmqpQueue.Name == "" {
+		log.Println("AmqpQueue  create")
+		c.AmqpQueue, err = c.AmqpChannel.QueueDeclare(c.QueueName, false, false, false, false, nil)
+		if err != nil {
+			log.Println("amqp Queue Declare error:%v", err)
+			return err
+		}
+	}
+
+	if c.ReplyTo == "" {
+		log.Println("tempQueue  create")
+		tempQueue, err := c.AmqpChannel.QueueDeclare("", false, false, true, false, nil)
+		if err != nil {
+			log.Println("amqp Callback Queue Declare error:%v", err)
+			return err
+		}
+		c.ReplyTo = tempQueue.Name
+	}
+
+	c.AmqMsgs, err = c.AmqpChannel.Consume(
+		c.ReplyTo, // queue
+		"",        // consumer
+		true,      // auto-ack
+		true,      // exclusive
+		false,     // no-local
+		false,     // no-wait
+		nil,       // args
+	)
+	if err != nil {
+		log.Println("Consume fail :", err)
+		return err
+	}
+
+	return nil
 }
 
 func (c *clientCodec) WriteRequest(r *rpc.Request, param interface{}) error {
@@ -57,7 +118,7 @@ func (c *clientCodec) WriteRequest(r *rpc.Request, param interface{}) error {
 			)
 		}
 	}
-	err := writeRequest(c.w, r.Seq, r.ServiceMethod, request)
+	err := c.RBwriteRequest(r.Seq, r.ServiceMethod, request)
 	if err != nil {
 		return err
 	}
@@ -65,9 +126,68 @@ func (c *clientCodec) WriteRequest(r *rpc.Request, param interface{}) error {
 	return nil
 }
 
+func (c *clientCodec) RBwriteRequest(id uint64, method string, request proto.Message) error {
+	// marshal request
+	pbRequest := []byte{}
+	if request != nil {
+		var err error
+		pbRequest, err = proto.Marshal(request)
+		if err != nil {
+			return err
+		}
+	}
+
+	// compress serialized proto data
+	compressedPbRequest := snappy.Encode(nil, pbRequest)
+
+	// generate header
+	header := &wire.RequestHeader{
+		Id:                         id,
+		Method:                     method,
+		RawRequestLen:              uint32(len(pbRequest)),
+		SnappyCompressedRequestLen: uint32(len(compressedPbRequest)),
+		Checksum:                   crc32.ChecksumIEEE(compressedPbRequest),
+		Body:                       compressedPbRequest,
+	}
+
+	// check header size
+	pbHeader, err := proto.Marshal(header)
+	if err != err {
+		return err
+	}
+	if len(pbHeader) > int(wire.Const_MAX_REQUEST_HEADER_LEN) {
+		return fmt.Errorf("protorpc.writeRequest: header larger than max_header_len: %d.", len(pbHeader))
+	}
+
+	err = c.AmqpChannel.Publish(
+		c.ExchangeName,   // exchange
+		c.AmqpQueue.Name, // routing key
+		false,            // mandatory
+		false,            // immediate
+		amqp.Publishing{
+			Headers:         amqp.Table{},
+			ContentType:     "text/plain",
+			ContentEncoding: "",
+			ReplyTo:         c.ReplyTo,
+			Body:            pbHeader,
+		})
+	if err != nil {
+		log.Fatal("Publish error: ", err)
+		return err
+	}
+
+	return nil
+}
+
 func (c *clientCodec) ReadResponseHeader(r *rpc.Response) error {
+	err := c.readyQueue()
+	if err != nil {
+		return err
+	}
 	header := wire.ResponseHeader{}
-	err := readResponseHeader(c.r, &header)
+	msg := <-c.AmqMsgs
+	// Marshal Header
+	err = proto.Unmarshal(msg.Body, &header)
 	if err != nil {
 		return err
 	}
@@ -96,9 +216,29 @@ func (c *clientCodec) ReadResponseBody(x interface{}) error {
 		}
 	}
 
-	err := readResponseBody(c.r, &c.respHeader, response)
+	compressedPbResponse := c.respHeader.Body
+
+	// checksum
+	if crc32.ChecksumIEEE(compressedPbResponse) != c.respHeader.Checksum {
+		return fmt.Errorf("protorpc.readResponseBody: unexpected checksum.")
+	}
+
+	// decode the compressed data
+	pbResponse, err := snappy.Decode(nil, compressedPbResponse)
 	if err != nil {
-		return nil
+		return err
+	}
+	// check wire header: rawMsgLen
+	if uint32(len(pbResponse)) != c.respHeader.RawResponseLen {
+		return fmt.Errorf("protorpc.readResponseBody: Unexcpeted header.RawResponseLen.")
+	}
+
+	// Unmarshal to proto message
+	if response != nil {
+		err = proto.Unmarshal(pbResponse, response)
+		if err != nil {
+			return err
+		}
 	}
 
 	c.respHeader = wire.ResponseHeader{}
@@ -107,29 +247,29 @@ func (c *clientCodec) ReadResponseBody(x interface{}) error {
 
 // Close closes the underlying connection.
 func (c *clientCodec) Close() error {
-	return c.c.Close()
+	var err error
+	err = c.AmqpChannel.Close()
+	if err == nil {
+		err = c.AmqpConnect.Close()
+	}
+
+	return err
 }
 
 // NewClient returns a new rpc.Client to handle requests to the
 // set of services at the other end of the connection.
-func NewClient(conn io.ReadWriteCloser) *rpc.Client {
-	return rpc.NewClientWithCodec(NewClientCodec(conn))
+func NewClient(uri string, exchangeName string, queueName string) *rpc.Client {
+	return rpc.NewClientWithCodec(NewClientCodec(uri, exchangeName, queueName))
 }
 
 // Dial connects to a Protobuf-RPC server at the specified network address.
-func Dial(network, address string) (*rpc.Client, error) {
-	conn, err := net.Dial(network, address)
-	if err != nil {
-		return nil, err
-	}
-	return NewClient(conn), err
-}
+func Dial(uri string, exchangeName string, queueName string) (*rpc.Client, error) {
 
-// DialTimeout connects to a Protobuf-RPC server at the specified network address.
-func DialTimeout(network, address string, timeout time.Duration) (*rpc.Client, error) {
-	conn, err := net.DialTimeout(network, address, timeout)
+	temConnect, err := amqp.Dial(uri)
 	if err != nil {
+		log.Println("amqp dial error:%v", err)
 		return nil, err
 	}
-	return NewClient(conn), err
+	temConnect.Close()
+	return NewClient(uri, exchangeName, queueName), err
 }

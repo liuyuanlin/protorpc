@@ -10,11 +10,7 @@ import (
 	"net/rpc"
 	"testing"
 
-	"github.com/chai2010/protorpc"
-)
-
-func init() {
-	err := listenAndServeArithAndEchoService("tcp", "127.0.0.1:1984")
+	"rmqrpcr := listenAndServeArithAndEchoService("tcp", "127.0.0.1:1984")
 	if err != nil {
 		log.Fatalf("listenAndServeArithAndEchoService: %v", err)
 	}

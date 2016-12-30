@@ -4,4 +4,4 @@
 
 //go:generate protoc --go_out=. wire.proto
 
-package protorpc_wire
+package rmqrpc_wire

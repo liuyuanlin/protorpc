@@ -103,4 +103,6 @@ Report bugs to <chaishushan@gmail.com>.
 
 Thanks!
 */
-package protorpc // import "github.com/chai2010/protorpc"
+package rmqrpc
+
+// import "github.com/chai2010/protorpc"

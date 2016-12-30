@@ -46,7 +46,7 @@ func (p *protorpcPlugin) GenerateImports(file *generator.FileDescriptor) {
 		p.P(`import "net"`)
 		p.P(`import "net/rpc"`)
 		p.P(`import "time"`)
-		p.P(`import protorpc "github.com/chai2010/protorpc"`)
+		p.P(`import protorpc "rmqrpc"`)
 	}
 }
 
