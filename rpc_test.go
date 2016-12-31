@@ -7,7 +7,6 @@ package rmqrpc_test
 import (
 	"errors"
 	"log"
-	"net"
 	"net/rpc"
 	"testing"
 	"time"
@@ -50,16 +49,12 @@ func (t *Echo) Echo(args *msg.EchoRequest, reply *msg.EchoResponse) error {
 }
 
 func TestInternalMessagePkg(t *testing.T) {
-	err := listenAndServeArithAndEchoService("tcp", "127.0.0.1:1414")
+	err := listenAndServeArithAndEchoService("amqp://guest:guest@localhost:5672/", "", "rpc_queue")
 	if err != nil {
 		log.Fatalf("listenAndServeArithAndEchoService: %v", err)
 	}
 
-	conn, err := net.Dial("tcp", "127.0.0.1:1414")
-	if err != nil {
-		t.Fatalf(`net.Dial("tcp", "127.0.0.1:1414"): %v`, err)
-	}
-	client := rpc.NewClientWithCodec(protorpc.NewClientCodec(conn))
+	client := rpc.NewClientWithCodec(rmqrpc.NewClientCodec("amqp://guest:guest@localhost:5672/", "", "rpc_queue"))
 	defer client.Close()
 
 	testArithClient(t, client)
@@ -69,11 +64,8 @@ func TestInternalMessagePkg(t *testing.T) {
 	testEchoClientAsync(t, client)
 }
 
-func listenAndServeArithAndEchoService(network, addr string) error {
-	clients, err := net.Listen(network, addr)
-	if err != nil {
-		return err
-	}
+func listenAndServeArithAndEchoService(uri string, exchangeName string, queueName string) error {
+
 	srv := rpc.NewServer()
 	if err := srv.RegisterName("ArithService", new(Arith)); err != nil {
 		return err
@@ -81,16 +73,8 @@ func listenAndServeArithAndEchoService(network, addr string) error {
 	if err := srv.RegisterName("EchoService", new(Echo)); err != nil {
 		return err
 	}
-	go func() {
-		for {
-			conn, err := clients.Accept()
-			if err != nil {
-				log.Printf("clients.Accept(): %v\n", err)
-				continue
-			}
-			go srv.ServeCodec(protorpc.NewServerCodec(conn))
-		}
-	}()
+	go srv.ServeCodec(rmqrpc.NewServerCodec("amqp://guest:guest@localhost:5672/", "", "rpc_queue"))
+
 	return nil
 }
 
