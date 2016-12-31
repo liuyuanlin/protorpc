@@ -57,7 +57,8 @@ func NewServerCodec(uri string, exchangeName string, queueName string) rpc.Serve
 }
 
 func (c *serverCodec) readyQueue() error {
-
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 	log.Println("start connect broker")
 	var err error
 	if c.AmqpConnect == nil {
@@ -82,20 +83,19 @@ func (c *serverCodec) readyQueue() error {
 			log.Println("amqp Queue Declare error:%v", err)
 			return err
 		}
-	}
-
-	c.AmqMsgs, err = c.AmqpChannel.Consume(
-		c.AmqpQueue.Name, // queue
-		"",               // consumer
-		true,             // auto-ack
-		true,             // exclusive
-		false,            // no-local
-		false,            // no-wait
-		nil,              // args
-	)
-	if err != nil {
-		log.Println("Consume fail :", err)
-		return err
+		c.AmqMsgs, err = c.AmqpChannel.Consume(
+			c.AmqpQueue.Name, // queue
+			"",               // consumer
+			true,             // auto-ack
+			false,            // exclusive
+			false,            // no-local
+			false,            // no-wait
+			nil,              // args
+		)
+		if err != nil {
+			log.Println("Consume fail :", err)
+			return err
+		}
 	}
 
 	return nil
@@ -214,7 +214,10 @@ func (c *serverCodec) RBwriteResponse(attr requestAttr, serr string, response pr
 	if serr != "" {
 		response = nil
 	}
-
+	err = c.readyQueue()
+	if err != nil {
+		return err
+	}
 	// marshal response
 	pbResponse := []byte{}
 	if response != nil {

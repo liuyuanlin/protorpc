@@ -49,18 +49,20 @@ func NewClientCodec(uri string, exchangeName string, queueName string) rpc.Clien
 }
 
 func (c *clientCodec) readyQueue() error {
-
-	log.Println("start connect broker")
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
 	var err error
 	if c.AmqpConnect == nil {
+		log.Println("start connect broker")
 		c.AmqpConnect, err = amqp.Dial(c.Uri)
 		if err != nil {
 			log.Println("amqp dial error:%v", err)
 			return err
 		}
 	}
-	log.Println("connect broker success")
+
 	if c.AmqpChannel == nil {
+		log.Println("connect broker success")
 		c.AmqpChannel, err = c.AmqpConnect.Channel()
 		if err != nil {
 			log.Println("amqp channel error:%v", err)
@@ -77,33 +79,38 @@ func (c *clientCodec) readyQueue() error {
 	}
 
 	if c.ReplyTo == "" {
-		log.Println("tempQueue  create")
-		tempQueue, err := c.AmqpChannel.QueueDeclare("", false, false, true, false, nil)
+		log.Println("tempQueue  create  gdfgsfdfd")
+		tempQueue, err := c.AmqpChannel.QueueDeclare("", false, false, false, false, nil)
 		if err != nil {
 			log.Println("amqp Callback Queue Declare error:%v", err)
 			return err
 		}
-		c.ReplyTo = tempQueue.Name
-	}
+		c.AmqMsgs, err = c.AmqpChannel.Consume(
+			tempQueue.Name, // queue
+			"",             // consumer
+			true,           // auto-ack
+			false,          // exclusive
+			false,          // no-local
+			false,          // no-wait
+			nil,            // args
+		)
+		if err != nil {
+			log.Println("Consume fail :", err)
+			return err
+		}
 
-	c.AmqMsgs, err = c.AmqpChannel.Consume(
-		c.ReplyTo, // queue
-		"",        // consumer
-		true,      // auto-ack
-		true,      // exclusive
-		false,     // no-local
-		false,     // no-wait
-		nil,       // args
-	)
-	if err != nil {
-		log.Println("Consume fail :", err)
-		return err
+		c.ReplyTo = tempQueue.Name
+		log.Println("tempQueue  name:", c.ReplyTo)
 	}
 
 	return nil
 }
 
 func (c *clientCodec) WriteRequest(r *rpc.Request, param interface{}) error {
+	err := c.readyQueue()
+	if err != nil {
+		return err
+	}
 	c.mutex.Lock()
 	c.pending[r.Seq] = r.ServiceMethod
 	c.mutex.Unlock()
@@ -118,7 +125,7 @@ func (c *clientCodec) WriteRequest(r *rpc.Request, param interface{}) error {
 			)
 		}
 	}
-	err := c.RBwriteRequest(r.Seq, r.ServiceMethod, request)
+	err = c.RBwriteRequest(r.Seq, r.ServiceMethod, request)
 	if err != nil {
 		return err
 	}
@@ -127,6 +134,10 @@ func (c *clientCodec) WriteRequest(r *rpc.Request, param interface{}) error {
 }
 
 func (c *clientCodec) RBwriteRequest(id uint64, method string, request proto.Message) error {
+	err := c.readyQueue()
+	if err != nil {
+		return err
+	}
 	// marshal request
 	pbRequest := []byte{}
 	if request != nil {
@@ -158,7 +169,7 @@ func (c *clientCodec) RBwriteRequest(id uint64, method string, request proto.Mes
 	if len(pbHeader) > int(wire.Const_MAX_REQUEST_HEADER_LEN) {
 		return fmt.Errorf("protorpc.writeRequest: header larger than max_header_len: %d.", len(pbHeader))
 	}
-
+	log.Println("RBwriteRequest : phHeader len = ", len(pbHeader))
 	err = c.AmqpChannel.Publish(
 		c.ExchangeName,   // exchange
 		c.AmqpQueue.Name, // routing key
