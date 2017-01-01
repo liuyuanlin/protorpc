@@ -73,7 +73,7 @@ func listenAndServeArithAndEchoService(uri string, exchangeName string, queueNam
 	if err := srv.RegisterName("EchoService", new(Echo)); err != nil {
 		return err
 	}
-	go srv.ServeCodec(rmqrpc.NewServerCodec("amqp://guest:guest@localhost:5672/", "", "rpc_queue"))
+	go srv.ServeCodec(rmqrpc.NewServerCodec(uri, exchangeName, queueName))
 
 	return nil
 }

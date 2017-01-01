@@ -5,7 +5,6 @@
 package service
 
 import (
-	"fmt"
 	"log"
 	"sync"
 )
@@ -24,11 +23,9 @@ func setupArithServer() {
 
 	go func() {
 		wg.Done()
-
-		addr := fmt.Sprintf("127.0.0.1:%d", arithPort)
-		err := ListenAndServeArithService("tcp", addr, new(Arith))
+		err := StartArithServiceServer("amqp://guest:guest@localhost:5672/", "", "rpc_queue", new(Arith))
 		if err != nil {
-			log.Fatalf("ListenAndServeArithService: %v", err)
+			log.Fatalf("StartServeArithService: %v", err)
 		}
 	}()
 }

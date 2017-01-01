@@ -6,22 +6,20 @@ package service
 
 import (
 	"log"
-	"net"
 	"net/rpc"
+	"rmqrpc"
 	"testing"
+)
 
-	"rmqrpcr := listenAndServeArithAndEchoService("tcp", "127.0.0.1:1984")
+func init() {
+	err := listenAndServeArithAndEchoService("amqp://guest:guest@localhost:5672/", "", "rpc_queue")
 	if err != nil {
 		log.Fatalf("listenAndServeArithAndEchoService: %v", err)
 	}
 }
 
 func TestAll(t *testing.T) {
-	conn, err := net.Dial("tcp", "127.0.0.1:1984")
-	if err != nil {
-		t.Fatalf(`net.Dial("tcp", "127.0.0.1:1984"): %v`, err)
-	}
-	client := rpc.NewClientWithCodec(protorpc.NewClientCodec(conn))
+	client := rpc.NewClientWithCodec(rmqrpc.NewClientCodec("amqp://guest:guest@localhost:5672/", "", "rpc_queue"))
 	defer client.Close()
 
 	testArithClient(t, client)
@@ -34,11 +32,8 @@ func TestAll(t *testing.T) {
 	testEchoStub(t, echoStub)
 }
 
-func listenAndServeArithAndEchoService(network, addr string) error {
-	clients, err := net.Listen(network, addr)
-	if err != nil {
-		return err
-	}
+func listenAndServeArithAndEchoService(uri string, exchangeName string, queueName string) error {
+
 	srv := rpc.NewServer()
 	if err := RegisterArithService(srv, new(Arith)); err != nil {
 		return err
@@ -46,16 +41,9 @@ func listenAndServeArithAndEchoService(network, addr string) error {
 	if err := RegisterEchoService(srv, new(Echo)); err != nil {
 		return err
 	}
-	go func() {
-		for {
-			conn, err := clients.Accept()
-			if err != nil {
-				log.Printf("clients.Accept(): %v\n", err)
-				continue
-			}
-			go srv.ServeCodec(protorpc.NewServerCodec(conn))
-		}
-	}()
+
+	go srv.ServeCodec(rmqrpc.NewServerCodec(uri, exchangeName, queueName))
+
 	return nil
 }
 

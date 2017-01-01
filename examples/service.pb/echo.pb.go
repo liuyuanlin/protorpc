@@ -8,12 +8,9 @@ import proto "github.com/golang/protobuf/proto"
 import fmt "fmt"
 import math "math"
 
-import "io"
 import "log"
-import "net"
 import "net/rpc"
-import "time"
-import protorpc "rmqrpc"
+import "rmqrpc"
 
 // Reference imports to suppress errors if they are not otherwise used.
 var _ = proto.Marshal
@@ -24,39 +21,54 @@ type EchoRequest struct {
 	Msg string `protobuf:"bytes,1,opt,name=msg" json:"msg,omitempty"`
 }
 
-func (m *EchoRequest) Reset()         { *m = EchoRequest{} }
-func (m *EchoRequest) String() string { return proto.CompactTextString(m) }
-func (*EchoRequest) ProtoMessage()    {}
+func (m *EchoRequest) Reset()                    { *m = EchoRequest{} }
+func (m *EchoRequest) String() string            { return proto.CompactTextString(m) }
+func (*EchoRequest) ProtoMessage()               {}
+func (*EchoRequest) Descriptor() ([]byte, []int) { return fileDescriptor1, []int{0} }
+
+func (m *EchoRequest) GetMsg() string {
+	if m != nil {
+		return m.Msg
+	}
+	return ""
+}
 
 type EchoResponse struct {
 	Msg string `protobuf:"bytes,1,opt,name=msg" json:"msg,omitempty"`
 }
 
-func (m *EchoResponse) Reset()         { *m = EchoResponse{} }
-func (m *EchoResponse) String() string { return proto.CompactTextString(m) }
-func (*EchoResponse) ProtoMessage()    {}
+func (m *EchoResponse) Reset()                    { *m = EchoResponse{} }
+func (m *EchoResponse) String() string            { return proto.CompactTextString(m) }
+func (*EchoResponse) ProtoMessage()               {}
+func (*EchoResponse) Descriptor() ([]byte, []int) { return fileDescriptor1, []int{1} }
+
+func (m *EchoResponse) GetMsg() string {
+	if m != nil {
+		return m.Msg
+	}
+	return ""
+}
+
+func init() {
+	proto.RegisterType((*EchoRequest)(nil), "service.EchoRequest")
+	proto.RegisterType((*EchoResponse)(nil), "service.EchoResponse")
+}
 
 type EchoService interface {
 	Echo(in *EchoRequest, out *EchoResponse) error
 	EchoTwice(in *EchoRequest, out *EchoResponse) error
 }
 
-// AcceptEchoServiceClient accepts connections on the listener and serves requests
-// for each incoming connection.  Accept blocks; the caller typically
-// invokes it in a go statement.
-func AcceptEchoServiceClient(lis net.Listener, x EchoService) {
+// StartEchoServiceServer start one rpc server
+func StartEchoServiceServer(uri string, exchangeName string, queueName string, x EchoService) (err error) {
 	srv := rpc.NewServer()
-	if err := srv.RegisterName("EchoService", x); err != nil {
+	if err = srv.RegisterName("EchoService", x); err != nil {
 		log.Fatal(err)
+		return
 	}
 
-	for {
-		conn, err := lis.Accept()
-		if err != nil {
-			log.Fatalf("lis.Accept(): %v\n", err)
-		}
-		go srv.ServeCodec(protorpc.NewServerCodec(conn))
-	}
+	go srv.ServeCodec(rmqrpc.NewServerCodec(uri, exchangeName, queueName))
+	return
 }
 
 // RegisterEchoService publish the given EchoService implementation on the server.
@@ -76,37 +88,14 @@ func NewEchoServiceServer(x EchoService) *rpc.Server {
 	return srv
 }
 
-// ListenAndServeEchoService listen announces on the local network address laddr
-// and serves the given EchoService implementation.
-func ListenAndServeEchoService(network, addr string, x EchoService) error {
-	lis, err := net.Listen(network, addr)
-	if err != nil {
-		return err
-	}
-	defer lis.Close()
-
-	srv := rpc.NewServer()
-	if err := srv.RegisterName("EchoService", x); err != nil {
-		return err
-	}
-
-	for {
-		conn, err := lis.Accept()
-		if err != nil {
-			log.Fatalf("lis.Accept(): %v\n", err)
-		}
-		go srv.ServeCodec(protorpc.NewServerCodec(conn))
-	}
-}
-
 type EchoServiceClient struct {
 	*rpc.Client
 }
 
 // NewEchoServiceClient returns a EchoService stub to handle
 // requests to the set of EchoService at the other end of the connection.
-func NewEchoServiceClient(conn io.ReadWriteCloser) *EchoServiceClient {
-	c := rpc.NewClientWithCodec(protorpc.NewClientCodec(conn))
+func NewEchoServiceClient(uri string, exchangeName string, queueName string) *EchoServiceClient {
+	c := rpc.NewClientWithCodec(rmqrpc.NewClientCodec(uri, exchangeName, queueName))
 	return &EchoServiceClient{c}
 }
 
@@ -131,20 +120,17 @@ func (c *EchoServiceClient) EchoTwice(in *EchoRequest) (out *EchoResponse, err e
 	return out, nil
 }
 
-// DialEchoService connects to an EchoService at the specified network address.
-func DialEchoService(network, addr string) (*EchoServiceClient, error) {
-	c, err := protorpc.Dial(network, addr)
-	if err != nil {
-		return nil, err
-	}
-	return &EchoServiceClient{c}, nil
-}
+func init() { proto.RegisterFile("echo.proto", fileDescriptor1) }
 
-// DialEchoServiceTimeout connects to an EchoService at the specified network address.
-func DialEchoServiceTimeout(network, addr string, timeout time.Duration) (*EchoServiceClient, error) {
-	c, err := protorpc.DialTimeout(network, addr, timeout)
-	if err != nil {
-		return nil, err
-	}
-	return &EchoServiceClient{c}, nil
+var fileDescriptor1 = []byte{
+	// 134 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x09, 0x6e, 0x88, 0x02, 0xff, 0xe2, 0xe2, 0x4a, 0x4d, 0xce, 0xc8,
+	0xd7, 0x2b, 0x28, 0xca, 0x2f, 0xc9, 0x17, 0x62, 0x2f, 0x4e, 0x2d, 0x2a, 0xcb, 0x4c, 0x4e, 0x55,
+	0x92, 0xe7, 0xe2, 0x76, 0x4d, 0xce, 0xc8, 0x0f, 0x4a, 0x2d, 0x2c, 0x4d, 0x2d, 0x2e, 0x11, 0x12,
+	0xe0, 0x62, 0xce, 0x2d, 0x4e, 0x97, 0x60, 0x54, 0x60, 0xd4, 0xe0, 0x0c, 0x02, 0x31, 0x95, 0x14,
+	0xb8, 0x78, 0x20, 0x0a, 0x8a, 0x0b, 0xf2, 0xf3, 0x8a, 0x53, 0x31, 0x55, 0x18, 0xd5, 0x40, 0x8c,
+	0x08, 0x86, 0x98, 0x28, 0x64, 0xcc, 0xc5, 0x02, 0xe2, 0x0a, 0x89, 0xe8, 0x41, 0xed, 0xd0, 0x43,
+	0xb2, 0x40, 0x4a, 0x14, 0x4d, 0x14, 0x6a, 0xaa, 0x05, 0x17, 0x27, 0x88, 0x1f, 0x52, 0x0e, 0x32,
+	0x81, 0x14, 0x9d, 0x49, 0x6c, 0x60, 0x0f, 0x19, 0x03, 0x02, 0x00, 0x00, 0xff, 0xff, 0x00, 0xc1,
+	0xd4, 0xbd, 0xde, 0x00, 0x00, 0x00,
 }

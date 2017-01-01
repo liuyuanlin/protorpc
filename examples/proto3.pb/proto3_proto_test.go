@@ -31,7 +31,7 @@ func (p *tEchoService) Echo(in *Message, out *Message) error {
 
 func TestMain(m *testing.M) {
 	go func() {
-		if err := ListenAndServeEchoService("tcp", "127.0.0.1:3000", new(tEchoService)); err != nil {
+		if err := StartEchoServiceServer("amqp://guest:guest@localhost:5672/", "", "rpc_queue", new(tEchoService)); err != nil {
 			log.Fatal(err)
 		}
 	}()
@@ -40,10 +40,8 @@ func TestMain(m *testing.M) {
 }
 
 func TestEchoService(t *testing.T) {
-	c, err := DialEchoService("tcp", "127.0.0.1:3000")
-	if err != nil {
-		t.Fatal(err)
-	}
+	c := NewEchoServiceClient("amqp://guest:guest@localhost:5672/", "", "rpc_queue")
+
 	defer c.Close()
 
 	in := Message{

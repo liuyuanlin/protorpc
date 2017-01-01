@@ -166,9 +166,7 @@ func (c *clientCodec) RBwriteRequest(id uint64, method string, request proto.Mes
 	if err != err {
 		return err
 	}
-	if len(pbHeader) > int(wire.Const_MAX_REQUEST_HEADER_LEN) {
-		return fmt.Errorf("protorpc.writeRequest: header larger than max_header_len: %d.", len(pbHeader))
-	}
+
 	log.Println("RBwriteRequest : phHeader len = ", len(pbHeader))
 	err = c.AmqpChannel.Publish(
 		c.ExchangeName,   // exchange

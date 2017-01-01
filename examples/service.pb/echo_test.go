@@ -5,7 +5,6 @@
 package service
 
 import (
-	"fmt"
 	"log"
 	"net/rpc"
 	"sync"
@@ -47,10 +46,9 @@ func setupEchoServer() {
 	go func() {
 		wg.Done()
 
-		addr := fmt.Sprintf("127.0.0.1:%d", echoPort)
-		err := ListenAndServeEchoService("tcp", addr, new(Echo))
+		err := StartEchoServiceServer("amqp://guest:guest@localhost:5672/", "", "rpc_queue", new(Echo))
 		if err != nil {
-			log.Fatalf("ListenAndServeEchoService: %v", err)
+			log.Fatalf("StartServeEchoService: %v", err)
 		}
 	}()
 }
@@ -58,14 +56,9 @@ func setupEchoServer() {
 func TestEchoService(t *testing.T) {
 	onceEcho.Do(setupEchoServer)
 
-	addr := fmt.Sprintf("%s:%d", echoHost, echoPort)
-	c, err := DialEchoService("tcp", addr)
-	if err != nil {
-		t.Fatalf(
-			`net.Dial("tcp", "%s:%d"): %v`,
-			echoHost, echoPort,
-			err,
-		)
+	c := NewEchoServiceClient("amqp://guest:guest@localhost:5672/", "", "rpc_queue")
+	if c == nil {
+		t.Fatalf(`NewEchoServiceClient faile`)
 	}
 	defer c.Close()
 
@@ -110,14 +103,9 @@ func testEchoService(t *testing.T, client *rpc.Client) {
 func TestClientSyncEcho(t *testing.T) {
 	onceEcho.Do(setupEchoServer)
 
-	addr := fmt.Sprintf("%s:%d", echoHost, echoPort)
-	echoClient, err := DialEchoService("tcp", addr)
-	if err != nil {
-		t.Fatalf(
-			`net.Dial("tcp", "%s:%d"): %v`,
-			echoHost, echoPort,
-			err,
-		)
+	echoClient := NewEchoServiceClient("amqp://guest:guest@localhost:5672/", "", "rpc_queue")
+	if echoClient == nil {
+		t.Fatalf(`NewEchoServiceClient faile`)
 	}
 	defer echoClient.Close()
 
@@ -125,6 +113,7 @@ func TestClientSyncEcho(t *testing.T) {
 	var reply *EchoResponse
 
 	// EchoService.EchoTwice
+	var err error
 	args.Msg = "abc"
 	reply, err = echoClient.EchoTwice(&args)
 	if err != nil {
@@ -154,20 +143,15 @@ func TestClientSyncEcho(t *testing.T) {
 func TestClientSyncMassive(t *testing.T) {
 	onceEcho.Do(setupEchoServer)
 
-	addr := fmt.Sprintf("%s:%d", echoHost, echoPort)
-	echoClient, err := DialEchoService("tcp", addr)
-	if err != nil {
-		t.Fatalf(
-			`net.Dial("tcp", "%s:%d"): %v`,
-			echoHost, echoPort,
-			err,
-		)
+	echoClient := NewEchoServiceClient("amqp://guest:guest@localhost:5672/", "", "rpc_queue")
+	if echoClient == nil {
+		t.Fatalf(`NewEchoServiceClient faile`)
 	}
 	defer echoClient.Close()
 
 	var args EchoRequest
 	var reply *EchoResponse
-
+	var err error
 	// EchoService.EchoTwice
 	args.Msg = echoMassiveRequest + "abc"
 	reply, err = echoClient.EchoTwice(&args)
@@ -204,14 +188,9 @@ func TestClientSyncMassive(t *testing.T) {
 func TestClientAsyncEcho(t *testing.T) {
 	onceEcho.Do(setupEchoServer)
 
-	addr := fmt.Sprintf("%s:%d", echoHost, echoPort)
-	client, err := DialEchoService("tcp", addr)
-	if err != nil {
-		t.Fatalf(
-			`net.Dial("tcp", "%s:%d"): %v`,
-			echoHost, echoPort,
-			err,
-		)
+	client := NewEchoServiceClient("amqp://guest:guest@localhost:5672/", "", "rpc_queue")
+	if client == nil {
+		t.Fatalf(`NewEchoServiceClient faile`)
 	}
 	defer client.Close()
 
@@ -237,14 +216,9 @@ func TestClientAsyncEcho(t *testing.T) {
 func TestClientAsyncEchoBatches(t *testing.T) {
 	onceEcho.Do(setupEchoServer)
 
-	addr := fmt.Sprintf("%s:%d", echoHost, echoPort)
-	client, err := DialEchoService("tcp", addr)
-	if err != nil {
-		t.Fatalf(
-			`net.Dial("tcp", "%s:%d"): %v`,
-			echoHost, echoPort,
-			err,
-		)
+	client := NewEchoServiceClient("amqp://guest:guest@localhost:5672/", "", "rpc_queue")
+	if client == nil {
+		t.Fatalf(`NewEchoServiceClient faile`)
 	}
 	defer client.Close()
 
@@ -307,14 +281,9 @@ func TestClientAsyncEchoBatches(t *testing.T) {
 func TestClientAsyncMassive(t *testing.T) {
 	onceEcho.Do(setupEchoServer)
 
-	addr := fmt.Sprintf("%s:%d", echoHost, echoPort)
-	client, err := DialEchoService("tcp", addr)
-	if err != nil {
-		t.Fatalf(
-			`net.Dial("tcp", "%s:%d"): %v`,
-			echoHost, echoPort,
-			err,
-		)
+	client := NewEchoServiceClient("amqp://guest:guest@localhost:5672/", "", "rpc_queue")
+	if client == nil {
+		t.Fatalf(`NewEchoServiceClient faile`)
 	}
 	defer client.Close()
 
@@ -342,15 +311,9 @@ func TestClientAsyncMassive(t *testing.T) {
 
 func TestClientAsyncMassiveBatches(t *testing.T) {
 	onceEcho.Do(setupEchoServer)
-
-	addr := fmt.Sprintf("%s:%d", echoHost, echoPort)
-	client, err := DialEchoService("tcp", addr)
-	if err != nil {
-		t.Fatalf(
-			`net.Dial("tcp", "%s:%d"): %v`,
-			echoHost, echoPort,
-			err,
-		)
+	client := NewEchoServiceClient("amqp://guest:guest@localhost:5672/", "", "rpc_queue")
+	if client == nil {
+		t.Fatalf(`NewEchoServiceClient faile`)
 	}
 	defer client.Close()
 
@@ -419,14 +382,9 @@ func TestClientAsyncMassiveBatches(t *testing.T) {
 func BenchmarkSyncEcho(b *testing.B) {
 	onceEcho.Do(setupEchoServer)
 
-	addr := fmt.Sprintf("%s:%d", echoHost, echoPort)
-	echoClient, err := DialEchoService("tcp", addr)
-	if err != nil {
-		b.Fatalf(
-			`net.Dial("tcp", "%s:%d"): %v`,
-			echoHost, echoPort,
-			err,
-		)
+	echoClient := NewEchoServiceClient("amqp://guest:guest@localhost:5672/", "", "rpc_queue")
+	if echoClient == nil {
+		b.Fatalf(`NewEchoServiceClient faile`)
 	}
 	defer echoClient.Close()
 
@@ -434,7 +392,7 @@ func BenchmarkSyncEcho(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		var args EchoRequest
 		var reply *EchoResponse
-
+		var err error
 		// EchoService.EchoTwice
 		args.Msg = "abc"
 		reply, err = echoClient.EchoTwice(&args)
@@ -479,14 +437,9 @@ func BenchmarkSyncEcho(b *testing.B) {
 func BenchmarkSyncMassive(b *testing.B) {
 	onceEcho.Do(setupEchoServer)
 
-	addr := fmt.Sprintf("%s:%d", echoHost, echoPort)
-	echoClient, err := DialEchoService("tcp", addr)
-	if err != nil {
-		b.Fatalf(
-			`net.Dial("tcp", "%s:%d"): %v`,
-			echoHost, echoPort,
-			err,
-		)
+	echoClient := NewEchoServiceClient("amqp://guest:guest@localhost:5672/", "", "rpc_queue")
+	if echoClient == nil {
+		b.Fatalf(`NewEchoServiceClient faile`)
 	}
 	defer echoClient.Close()
 
@@ -494,7 +447,7 @@ func BenchmarkSyncMassive(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		var args EchoRequest
 		var reply *EchoResponse
-
+		var err error
 		// EchoService.EchoTwice
 		args.Msg = echoMassiveRequest + "abc"
 		reply, err = echoClient.EchoTwice(&args)
@@ -548,14 +501,9 @@ func BenchmarkSyncMassive(b *testing.B) {
 func BenchmarkAsyncEcho(b *testing.B) {
 	onceEcho.Do(setupEchoServer)
 
-	addr := fmt.Sprintf("%s:%d", echoHost, echoPort)
-	client, err := DialEchoService("tcp", addr)
-	if err != nil {
-		b.Fatalf(
-			`net.Dial("tcp", "%s:%d"): %v`,
-			echoHost, echoPort,
-			err,
-		)
+	client := NewEchoServiceClient("amqp://guest:guest@localhost:5672/", "", "rpc_queue")
+	if client == nil {
+		b.Fatalf(`NewEchoServiceClient faile`)
 	}
 	defer client.Close()
 
@@ -621,14 +569,9 @@ func BenchmarkAsyncEcho(b *testing.B) {
 func BenchmarkAsyncMassive(b *testing.B) {
 	onceEcho.Do(setupEchoServer)
 
-	addr := fmt.Sprintf("%s:%d", echoHost, echoPort)
-	client, err := DialEchoService("tcp", addr)
-	if err != nil {
-		b.Fatalf(
-			`net.Dial("tcp", "%s:%d"): %v`,
-			echoHost, echoPort,
-			err,
-		)
+	client := NewEchoServiceClient("amqp://guest:guest@localhost:5672/", "", "rpc_queue")
+	if client == nil {
+		b.Fatalf(`NewEchoServiceClient faile`)
 	}
 	defer client.Close()
 
